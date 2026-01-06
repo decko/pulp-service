@@ -48,3 +48,9 @@ def no_op_task():
     with connections["default"].cursor() as cursor:
         cursor.execute("SELECT 1")
     time.sleep(0.3) # This task will not take less than 300ms to execute
+
+
+def oom_trigger_task():
+    data = []
+    while True:
+        data.append(' ' * 10**6)  # Append 1MB strings repeatedly
