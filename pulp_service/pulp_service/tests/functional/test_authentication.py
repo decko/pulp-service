@@ -324,4 +324,117 @@ def test_public_domain_allows_unauthenticated_get(
         # Clean up headers
         pulpcore_bindings.DomainsApi.api_client.default_headers.pop("x-rh-identity", None)
         python_bindings.RepositoriesPythonApi.api_client.default_headers.pop("x-rh-identity", None)
+
+
+def test_turnpike_registry_auth_authenticates_successfully(
+    anonymous_user,
+    pulpcore_bindings,
+    python_bindings,
+    gen_object_with_cleanup,
+    cleanup_auth_headers,
+):
+    """Test that a valid Turnpike registry-auth identity authenticates and can create resources."""
+    turnpike_identity = {
+        "identity": {
+            "type": "Registry",
+            "auth_type": "registry-auth",
+            "registry": {
+                "org_id": "111111",
+                "username": "robot-account",
+            },
+        }
+    }
+
+    with anonymous_user:
+        header_content = json.dumps(turnpike_identity)
+        auth_header = b64encode(bytes(header_content, "ascii"))
+
+        pulpcore_bindings.DomainsApi.api_client.default_headers["x-rh-identity"] = auth_header
+
+        domain_name = str(uuid4())
+        domain = gen_object_with_cleanup(
+            pulpcore_bindings.DomainsApi,
+            {
+                "name": domain_name,
+                "storage_class": "pulpcore.app.models.storage.FileSystem",
+                "storage_settings": {"MEDIA_ROOT": "/var/lib/pulp/media/"},
+            },
+        )
+
+        assert domain is not None
+        assert domain.name == domain_name
+
+        python_bindings.RepositoriesPythonApi.api_client.default_headers["x-rh-identity"] = (
+            auth_header
+        )
+
+        repo = gen_object_with_cleanup(
+            python_bindings.RepositoriesPythonApi, {"name": str(uuid4())}, pulp_domain=domain_name
+        )
+
+        assert repo is not None
+
+
+def test_turnpike_registry_auth_rejects_non_registry_auth_type(
+    anonymous_user,
+    pulpcore_bindings,
+    gen_object_with_cleanup,
+    cleanup_auth_headers,
+):
+    """Test that a Turnpike identity with auth_type != 'registry-auth' is not authenticated.
+
+    The jq filter returns null for other auth_type values, causing the class to fall through.
+    With no other auth class able to handle this format, the request should get a 401.
+    """
+    non_registry_identity = {
+        "identity": {
+            "type": "Associate",
+            "auth_type": "saml-auth",
+            "registry": {
+                "org_id": "222222",
+                "username": "some-user",
+            },
+        }
+    }
+
+    with anonymous_user:
+        header_content = json.dumps(non_registry_identity)
+        auth_header = b64encode(bytes(header_content, "ascii"))
+
+        pulpcore_bindings.DomainsApi.api_client.default_headers["x-rh-identity"] = auth_header
+
+        with pytest.raises(pulpcore_bindings.ApiException) as exp:
+            gen_object_with_cleanup(
+                pulpcore_bindings.DomainsApi,
+                {
+                    "name": str(uuid4()),
+                    "storage_class": "pulpcore.app.models.storage.FileSystem",
+                    "storage_settings": {"MEDIA_ROOT": "/var/lib/pulp/media/"},
+                },
+            )
+        assert exp.value.status == 401
+
+
+def test_turnpike_registry_auth_rejects_invalid_base64_header(
+    anonymous_user,
+    pulpcore_bindings,
+    gen_object_with_cleanup,
+    cleanup_auth_headers,
+):
+    """Test that a non-base64-encoded X-RH-IDENTITY header raises a 401 immediately."""
+    with anonymous_user:
+        pulpcore_bindings.DomainsApi.api_client.default_headers["x-rh-identity"] = (
+            "this-is-not-base64!!!"
+        )
+
+        with pytest.raises(pulpcore_bindings.ApiException) as exp:
+            gen_object_with_cleanup(
+                pulpcore_bindings.DomainsApi,
+                {
+                    "name": str(uuid4()),
+                    "storage_class": "pulpcore.app.models.storage.FileSystem",
+                    "storage_settings": {"MEDIA_ROOT": "/var/lib/pulp/media/"},
+                },
+            )
+        assert exp.value.status == 401
  
