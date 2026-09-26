@@ -49,8 +49,10 @@ uv run management_tools/apply-identity-content-guards.py \
 ```
 
 The mode sets `default_content_guard` only when it is empty. It fails closed on
-a conflicting default and records the prior domain default for rollback. Do
-not combine it with `--partial-apply` or `--max-changes`.
+a conflicting default and records the prior domain default for rollback. With
+`--partial-apply`, it defers unresolved audit domains, returns exit code `3`,
+and records those domains as pending. It must not be combined with
+`--max-changes`.
 
 ## Prerequisites
 

@@ -608,3 +608,51 @@ def test_domain_defaults_only_uses_domain_inventory_without_distributions(
     state = json.loads((tmp_path / "result.json").read_text())
     assert state["counts"]["selected_domains"] == 1
     assert state["counts"]["excluded_domains"] == 2
+
+
+def test_domain_defaults_only_partial_apply_defers_unresolved_domains(
+    monkeypatch, tmp_path
+):
+    report_path = tmp_path / "domains-partial.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "complete": False,
+                "errors": ["missing-domain: audit request failed"],
+                "metadata": {
+                    "environment": "stage",
+                    "base_url": "https://packages.stage.redhat.com",
+                    "public_domains_included": False,
+                    "distribution_endpoints": ["distributions/rpm/rpm"],
+                },
+                "domains": [
+                    {"name": "tenant-a", "pulp_href": FakeHostedPulp.domain_href},
+                    {"name": "missing-domain", "pulp_href": "/missing/"},
+                ],
+                "distributions": [],
+            }
+        )
+    )
+    FakeHostedPulp.instances.clear()
+    monkeypatch.setattr(tool, "HostedPulp", FakeHostedPulp)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "apply-identity-content-guards.py",
+            "--report",
+            str(report_path),
+            "--domain-defaults-only",
+            "--partial-apply",
+            "--apply",
+            "--yes",
+            "--output",
+            str(tmp_path / "result.json"),
+        ],
+    )
+
+    assert tool.main() == 3
+    state = json.loads((tmp_path / "result.json").read_text())
+    assert state["completion"] == "partial_pending_audit"
+    assert state["counts"]["audit_deferred"] == 1
+    assert state["unresolved_audit_domains"] == ["missing-domain"]

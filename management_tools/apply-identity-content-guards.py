@@ -402,11 +402,16 @@ def merge_reports(
 
 def merge_domains(reports: list[Report]) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
+    names: dict[str, str] = {}
     for report in reports:
         for domain in report.domains:
             href = domain["pulp_href"]
+            name = domain["name"]
+            if name in names and names[name] != href:
+                raise ToolError(f"domain name maps to multiple hrefs: {name}")
+            names[name] = href
             existing = merged.get(href)
-            if existing is not None and existing.get("name") != domain.get("name"):
+            if existing is not None and existing.get("name") != name:
                 raise ToolError(f"conflicting records for domain {href}")
             merged[href] = domain
     if not merged:
@@ -1009,7 +1014,10 @@ def reconcile_domain_defaults(
     output: Path,
     rollback: Path,
 ) -> int:
-    if any(not report.complete or report.errors for report in reports):
+    unresolved_audit_domains = set()
+    if args.partial_apply:
+        unresolved_audit_domains = validate_partial_apply_reports(reports)
+    elif any(not report.complete or report.errors for report in reports):
         raise ToolError(
             "--domain-defaults-only requires complete, error-free audit reports"
         )
@@ -1026,6 +1034,8 @@ def reconcile_domain_defaults(
         reason = None
         if requested_domains and name not in requested_domains:
             reason = "outside_domain_filter"
+        elif name in unresolved_audit_domains:
+            reason = "unresolved_audit_domain"
         elif name.lower().startswith("public-"):
             reason = "public_domain"
         elif name == "default":
@@ -1038,8 +1048,10 @@ def reconcile_domain_defaults(
     client = HostedPulp(args.hosted_pulp_bin, args.profile)
     state: dict[str, Any] = {
         "profile": args.profile,
-        "mode": "domain-defaults-only",
-        "completion": "in_progress",
+        "mode": "domain-defaults-partial-apply"
+        if args.partial_apply
+        else "domain-defaults-only",
+        "completion": "partial_pending_audit" if args.partial_apply else "in_progress",
         "reports": [
             {
                 "path": report.path,
@@ -1069,11 +1081,22 @@ def reconcile_domain_defaults(
             "input_domains": len(domains),
             "selected_domains": len(selected),
             "excluded_domains": len(excluded),
+            "audit_deferred": sum(
+                item["reason"] == "unresolved_audit_domain" for item in excluded
+            ),
+            "unresolved_audit_domains": len(unresolved_audit_domains),
             "changed": 0,
             "skipped": 0,
             "failed": 0,
         },
         "excluded_domains": excluded,
+        "unresolved_audit_domains": sorted(unresolved_audit_domains),
+        "unresolved_audit_errors": [
+            error
+            for report in reports
+            if not report.complete or report.errors
+            for error in report.errors
+        ],
         "domains": {},
         "rollback": [],
         "errors": [],
@@ -1146,13 +1169,17 @@ def reconcile_domain_defaults(
 
     if state["counts"]["failed"]:
         state["completion"] = "failed"
+    elif args.partial_apply:
+        state["completion"] = "partial_pending_audit"
     elif args.apply:
         state["completion"] = "complete"
     else:
         state["completion"] = "plan"
     write_state(output, rollback, state)
     print(json.dumps({"output": str(output), "counts": state["counts"]}, indent=2))
-    return 1 if state["counts"]["failed"] else 0
+    if state["counts"]["failed"]:
+        return 1
+    return 3 if args.partial_apply else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1235,8 +1262,6 @@ def main() -> int:
         parser.error("--apply requires --yes")
     if args.partial_apply and not args.apply:
         parser.error("--partial-apply requires --apply --yes")
-    if args.domain_defaults_only and args.partial_apply:
-        parser.error("--domain-defaults-only cannot be combined with --partial-apply")
     if args.domain_defaults_only and args.max_changes:
         parser.error("--max-changes cannot be used with --domain-defaults-only")
 

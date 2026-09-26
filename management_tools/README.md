@@ -57,7 +57,9 @@ guards. The composite is not assigned to distributions by this tool.
 
 Use `--domain-defaults-only` to reconcile the default guard for every audited
 non-public domain, including domains with no distributions. This mode does not
-read or change distributions.
+read or change distributions. Combine it with `--partial-apply --apply --yes`
+to reconcile successfully audited domains while recording unresolved audit
+domains as pending with exit code `3`.
 
 The default mode is a plan. Use `--apply --yes` to mutate Pulp. Multiple audit
 reports can be supplied when a second report fills domains missed by the first:
